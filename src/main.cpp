@@ -63,7 +63,7 @@ public:
 	BSpline() {
 		k = 2;
 		m = 0; //num control pt
-		inc = 0.01;
+		inc = 0.001;
 		knots = {0, 0.5, 1};
 		weights = {};
 		controlPoints = {};
@@ -104,9 +104,8 @@ public:
 			knots.push_back(0);
 		}
 		float knotInc = 1/(m-k+2);
-		for(int i = k; i < m + 1; i++) {
-			knots.push_back(knotInc);
-			knotInc += knotInc;
+		for(int i = 0; i < m - k + 2; i++) { //CHANGE: index used to be k to m inclusive
+			knots.push_back(knotInc*(1+i));
 		}
 		for(int i = m+1; i < m + k + 1; i++) {
 			knots.push_back(1);
@@ -116,7 +115,8 @@ public:
 	// computing E_delta_1 from the set of input Ei
 	glm::vec2 E_delta_1(float u) {
 		int d = delta(u);
-		if(d == -1 ) return (u < 1) ? controlPoints[0] : controlPoints[controlPoints.size()-1]; // if its not in any interval then its prob the first point?? (or last)
+		// CHANGE: comment out line below
+		// if(d == -1 ) return (u < 1) ? controlPoints[0] : controlPoints[controlPoints.size()-1]; // if its not in any interval then its prob the first point?? (or last)
 		// cout<<"@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@"<<endl;
 		vector<glm::vec2> c;
 		for(int i = 0; i < k; i++) {
@@ -157,20 +157,23 @@ public:
 			glm::vec2 c = E_delta_1(u);
 			curve.push_back(c.x);
 			curve.push_back(c.y);
-
-			// curve.push_back(u);
-			// curve.push_back(E_delta_1(k, m, u));
-			// cout<< "(u, S(u)) = (" <<curve[curve.size()-2]<<" , "<<curve[curve.size()-1]<<")"<<endl;
-
 		}
 		return curve;
-		// cout<<"@@@@@@@@@@@@@@@@@@@@@@@@@@@"<<endl;
-
 	}
 
-	~BSpline() {
-		// delete this;
+	vector<float> getSurface() {
+		vector<float> c = getCurve();
+		vector<float> s;
+		for(int i = 0; i < c.size(); i+=2) {
+			for(int j = 0; i < 2*math.PI + inc; i += inc) {
+				s.push_back(c[i] * glm::cos(j));
+				s.push_back(c[i] * glm::sin(j));
+				s.push_back(c[i+1]);
+			}
+		}
 	}
+
+	~BSpline() {}
 }b;
 
 
@@ -366,49 +369,48 @@ glm::mat4 getMVP() {
 	return Scale*RotateZ*RotateY*RotateX;
 }
 
-// draw contents of a va
+void renderCurve(VertexArray &va, GLuint pid) {
+	glUseProgram(pid);
+	glBindVertexArray(va.id);
+	glDrawArrays(GL_LINE_STRIP, 0, va.count);
+	glBindVertexArray(0);
+	glUseProgram(0);
+}
+void renderPoints(VertexArray &va, GLuint pid, int size) {
+	glPointSize(size);
+	glUseProgram(pid);
+	glBindVertexArray(va.id);
+	glDrawArrays(GL_POINTS, 0, va.count);
+	glBindVertexArray(0);
+	glUseProgram(0);
+}
+void renderSurface(VertexArray &va, GLuint pid) {
+	glUseProgram(pid);
+	glBindVertexArray(va.id);
+	glDrawArrays(GL_TRIANGLES, 0, va.count);
+	glBindVertexArray(0);
+	glUseProgram(0);
+}
+
 void render(GLuint pid, GLuint qid) {
 	if(b.controlPoints.size() > 0) {
 		if(b.controlPoints.size() > 0) {
+			// render curve
 			vector<float> curve = b.getCurve();
 			int curveVertices = curve.size()/2;
 			VertexArray vac(curveVertices);
 			vac.addBuffer("vac", 0, curve);
-			glUseProgram(qid);
-			glBindVertexArray(vac.id);
-			glDrawArrays(GL_LINE_STRIP, 0, vac.count);
-			glBindVertexArray(0);
-			glUseProgram(0);
+			renderCurve(vac, pid);
 		}
-
-		// render control Points
+		// render control Points and the lines connecting the points
 		VertexArray vap(b.controlPoints.size());
 		vap.addBuffer("vap", 0, b.controlPoints);
-		glPointSize(5);
-		glUseProgram(pid);
-		glBindVertexArray(vap.id);
-		glDrawArrays(GL_POINTS, 0, vap.count);
-		glDrawArrays(GL_LINE_STRIP, 0, vap.count);
-		glBindVertexArray(0);
-		glUseProgram(0);
+		renderPoints(vap, pid, 5);
+		renderCurve(vap, pid);
 
 	}
 
 }
-
-// static curve set up
-// void drawCurve(GLuint pid) {
-//
-// 	if(b.controlPoints.size() > 0) {
-// 		vector<float> curve = b.getCurve();
-// 			int curveVertices = curve.size()/2;
-//
-// 			VertexArray va(curveVertices);
-// 			va.addBuffer("va", 0, curve);
-// 			render(pid, va);
-// 	}
-// }
-
 
 // keyboard controls
 void key_callback(GLFWwindow* window, int key, int scancode, int action, int mods) {
