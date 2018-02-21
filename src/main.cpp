@@ -34,14 +34,14 @@ int windowHeight;
 
 bool closeWindow = false;
 double dotX, dotY;
-vector<float> controlPoints = {0,0};
+vector<float> controlPoints;
 float scroll = 1.f;
 double offsetX=0, offsetY = 0;
 // object transformation controls
 float rollAngle = 0, pitchAngle = 0, yawAngle = 0;
 float scale = 1;
 int dots = 0;
-
+bool mouseButtonPressed = false;
 // curve parameters
 // k = order of B-spline
 // m = number of control points
@@ -49,19 +49,130 @@ int dots = 0;
 // U = knot sequence
 // u = fixed parameter value
 
-float m = 5, k = 3;
-// float u;
-vector<float> U = {0, 0, 0, 0.25, 0.5, 0.75, 1, 1, 1};
-//vector<float> E = {0.1, 0.1, 0.5, 0.5, 0.3, 0.3, 0.7, 0.7, 0.0, 0.0, 0.2, 0.2};//{0.1, 0.1, 0.2, 0.2, 0.3, 0.3, 0.4, 0.4, 0.5, 0.5, 0.6, 0.6}; //, 2, 3, 4, 5, 6}; // knot sequence + control points
-float inc = 0.001; //inc
 // for transformations
 glm::mat4 mvp;
 
-struct Point {
-	float x;
-	float y;
-}E1 = {0.2, 0.2}, E2 = {0.4, 0.4}, E3 = {0.6, 0.4}, E4 = {0.8, 0.2}, E5 = {0.6, 0.00}, E6 = {0.4, 0.00};
-vector<Point> E = {E1, E2, E3, E4, E5, E6};
+
+class BSpline {
+public:
+	float k, m, inc;
+	vector<float> knots;
+	vector<glm::vec2> controlPoints;
+	vector<float> weights;
+
+	BSpline() {
+		k = 2;
+		m = 0; //num control pt
+		inc = 0.01;
+		knots = {0, 0.5, 1};
+		weights = {};
+		controlPoints = {};
+		cout<<"wtf"<<endl;
+		init();
+	}
+	void init() {
+
+	}
+
+	void incK(int increase) {
+		k += (increase == 0 || k+1 > m+1) ? 0 : 1; 	// inc k
+		k -= (increase == 1 || k-1 < 2) ? 0 : 1; 	// dec k
+	}
+	// void decK() {
+	// 	k -= (k-1 < 2) ? 0 : 1;
+	// }
+	void incDetail(int increase) {
+		inc -= (increase == 1 && (inc -= inc/2 < 0.00001)) ? 0 : inc/2;	// inc detail
+		inc += (increase == 0 && (inc += inc/2 > 0.01)) ? 0 : inc/2;		// dec detail
+	}
+	void decDetail() {
+		inc += (inc += inc/2 > 0.01) ? 0 : inc/2;
+	}
+
+	// calculating delta index from u
+	int delta(float u) {
+		int ret = -1;
+		for(int i = 0; i < m + k; i++) {
+			if(u >= knots[i] && u < knots[i+1]) ret = i;
+		}
+		// cout<< "i = " <<ret<<endl;
+		return ret;
+	}
+
+	void updateKnots() {
+		for(int i = 0; i < k; i++) {
+			knots.push_back(0);
+		}
+		float knotInc = 1/(m-k+2);
+		for(int i = k; i < m + 1; i++) {
+			knots.push_back(knotInc);
+			knotInc += knotInc;
+		}
+		for(int i = m+1; i < m + k + 1; i++) {
+			knots.push_back(1);
+		}
+	}
+
+	// computing E_delta_1 from the set of input Ei
+	glm::vec2 E_delta_1(float u) {
+		int d = delta(u);
+		if(d == -1 ) return (u < 1) ? controlPoints[0] : controlPoints[controlPoints.size()-1]; // if its not in any interval then its prob the first point?? (or last)
+		// cout<<"@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@"<<endl;
+		vector<glm::vec2> c;
+		for(int i = 0; i < k; i++) {
+			c.push_back(controlPoints[d-i]);
+		}
+		for( int r = k; r > 1; r--) {
+			int i = d;
+			for(int s = 0; s < r-1; s++) {
+				float omega = (u - knots[i])/(knots[i+r-1] - knots[i]);
+				c[s].x = omega*c[s].x + (1-omega)*c[s+1].x;
+				c[s].y = omega*c[s].y + (1-omega)*c[s+1].y;
+				i--;
+			}
+		}
+		return c[0];
+	}
+
+	void addControlPoint(float x, float y) {
+		controlPoints.push_back(glm::vec2(x, y));
+		m = controlPoints.size() == 0 ? 0 : controlPoints.size() - 1;
+	}
+	int selectControlPoint(float x, float y) {
+		for(int i = 0; i < (int)controlPoints.size(); i++) {
+			if(abs(controlPoints[i].x - x) < 10/(float)windowWidth && abs(controlPoints[i].y - y) < 10/(float)windowHeight)
+				return i;
+		}
+		return -1;
+	}
+	void deleteControlPoint(int i) {
+		controlPoints.erase(controlPoints.begin() + i);
+		m = controlPoints.size() == 0 ? 0 : controlPoints.size() - 1;
+	}
+
+	vector<float> getCurve() {
+		updateKnots();
+		vector<float> curve;
+		for(float u = 0; u < 1 +inc; u += inc) {
+			glm::vec2 c = E_delta_1(u);
+			curve.push_back(c.x);
+			curve.push_back(c.y);
+
+			// curve.push_back(u);
+			// curve.push_back(E_delta_1(k, m, u));
+			// cout<< "(u, S(u)) = (" <<curve[curve.size()-2]<<" , "<<curve[curve.size()-1]<<")"<<endl;
+
+		}
+		return curve;
+		// cout<<"@@@@@@@@@@@@@@@@@@@@@@@@@@@"<<endl;
+
+	}
+
+	~BSpline() {
+		// delete this;
+	}
+}b;
+
 
 // taken from boilerplate code from CPSC453
 class Program {
@@ -219,6 +330,17 @@ public:
 		glBindVertexArray(0);
 	}
 
+	void addBuffer(string name, int index, vector<glm::vec2> temp) {
+		vector<float> buffer;
+		for(int i = 0; i < (int)temp.size(); i++) {
+			buffer.push_back(temp[i].x);
+			buffer.push_back(temp[i].y);
+		}
+		addBuffer(name, index, buffer);
+
+	}
+
+
 	void updateBuffer(string name, vector<float> buffer) {
 		glBindBuffer(GL_ARRAY_BUFFER, buffers[name]);
 		glBufferData(GL_ARRAY_BUFFER, buffer.size() * sizeof(float),
@@ -244,157 +366,83 @@ glm::mat4 getMVP() {
 	return Scale*RotateZ*RotateY*RotateX;
 }
 
-
-// calculating delta index from u
-int delta(float u, float m, float k) {
-	int ret = -1;
-	for(int i = 0; i < m + k; i++) {
-		if(u > U[i] && u < U[i+1]) ret = i;
-	}
-	// cout<< "i = " <<ret<<endl;
-	return ret;
-}
-
-// computing E_delta_1 from the set of input Ei
-Point E_delta_1(float k, float m, float u) {
-	int d = delta(u, m, k);
-	if(d == -1 ) return (u < 1) ? E[0] : E[E.size()-1]; // if its not in any interval then its prob the first point?? (or last)
-	// cout<<"@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@"<<endl;
-	vector<Point> c;
-	for(int i = 0; i < k; i++) {
-		c.push_back(E[d-i]);
-	}
-	for( int r = k; r > 1; r--) {
-		int i = d;
-		for(int s = 0; s < r-1; s++) {
-			float omega = (u - U[i])/(U[i+r-1] - U[i]);
-			c[s].x = omega*c[s].x + (1-omega)*c[s+1].x;
-			c[s].y = omega*c[s].y + (1-omega)*c[s+1].y;
-			i--;
-		}
-	}
-	return c[0];
-}
-
-
 // draw contents of a va
-void render(GLuint pid, VertexArray &va) {
-	glUseProgram(pid);
-	glBindVertexArray(va.id);
-	glDrawArrays(GL_LINE_STRIP, 0, va.count);
-	glBindVertexArray(0);
-	glUseProgram(0);
+void render(GLuint pid, GLuint qid) {
+	if(b.controlPoints.size() > 0) {
+		if(b.controlPoints.size() > 0) {
+			vector<float> curve = b.getCurve();
+			int curveVertices = curve.size()/2;
+			VertexArray vac(curveVertices);
+			vac.addBuffer("vac", 0, curve);
+			glUseProgram(qid);
+			glBindVertexArray(vac.id);
+			glDrawArrays(GL_LINE_STRIP, 0, vac.count);
+			glBindVertexArray(0);
+			glUseProgram(0);
+		}
 
-	// for(int i = 0; i < controlPoints.size(); i++) {
-		VertexArray vac(controlPoints.size()/2);
-		vac.addBuffer("vac", 0, controlPoints);
+		// render control Points
+		VertexArray vap(b.controlPoints.size());
+		vap.addBuffer("vap", 0, b.controlPoints);
 		glPointSize(5);
 		glUseProgram(pid);
-		glBindVertexArray(vac.id);
-		glDrawArrays(GL_POINTS, 0, vac.count);
+		glBindVertexArray(vap.id);
+		glDrawArrays(GL_POINTS, 0, vap.count);
+		glDrawArrays(GL_LINE_STRIP, 0, vap.count);
 		glBindVertexArray(0);
 		glUseProgram(0);
-	// }
+
+	}
 
 }
 
 // static curve set up
-void drawCurve(GLuint pid) {
-
-		vector<float> curve;
-		for(float u = 0; u < 1 +inc; u += inc) {
-			Point c = E_delta_1(k, m, u);
-			curve.push_back(c.x);
-			curve.push_back(c.y);
-			// curve.push_back(u);
-			// curve.push_back(E_delta_1(k, m, u));
-			// cout<< "(u, S(u)) = (" <<curve[curve.size()-2]<<" , "<<curve[curve.size()-1]<<")"<<endl;
-
-		}
-
-		// cout<<"@@@@@@@@@@@@@@@@@@@@@@@@@@@"<<endl;
-
-          int curveVertices = curve.size()/2;
-
-          VertexArray va(curveVertices);
-          va.addBuffer("va", 0, curve);
-          render(pid, va);
-
-}
-
-// ask user for params
-// void getParams() {
-// 	cout<<"Enter the radius of the outer circle: ";
-// 	if(!(cin>>R)|| R <= 0){ cout<<"\nERROR: Input must be a positive real number\n"; exit(0);}
-// 	cout<<"\nEnter the radius of the inner circle: ";
-// 	if(!(cin>>r) || r <= 0 || r >= R){ cout<<"\nERROR: Input must be a positive real number less than R\n"; exit(0);}
-// 	cout<<"\nEnter the number of cycles: ";
-// 	if(!(cin>>n) || n <= 0){ cout<<"\nERROR: Input must be a positive real number\n"; exit(0);}
-// 	cout<<"\nEnter the direction of rotation (1 = CCW, -1 = CW): ";
-// 	if(!(cin>>dir)||((dir!=1)&&(dir!=-1))){ cout<<"\nERROR: Input must be 1 or -1\n"; exit(0);}
-// 	cout<<endl;
+// void drawCurve(GLuint pid) {
+//
+// 	if(b.controlPoints.size() > 0) {
+// 		vector<float> curve = b.getCurve();
+// 			int curveVertices = curve.size()/2;
+//
+// 			VertexArray va(curveVertices);
+// 			va.addBuffer("va", 0, curve);
+// 			render(pid, va);
+// 	}
 // }
+
 
 // keyboard controls
 void key_callback(GLFWwindow* window, int key, int scancode, int action, int mods) {
 
           if (key == GLFW_KEY_ESCAPE && action == GLFW_PRESS) closeWindow = closeWindow?false:true;
+		if (key == GLFW_KEY_X && action == GLFW_PRESS && mouseButtonPressed) {
+			glfwGetCursorPos(window, &dotX, &dotY);
 
-		// reset to default state
-		if (key == GLFW_KEY_SPACE && action == GLFW_PRESS) {
-			rollAngle = 0; pitchAngle = 0; yawAngle = 0; scale = 1.0;
+			dotX = (float)(2*dotX)/windowWidth - 1;
+			dotY = 1 - (float)(2*dotY)/windowHeight;
+			int idx = b.selectControlPoint(dotX, dotY);
+			if(idx != -1) {
+				cout<<"select"<<idx<<endl;
+				glfwGetCursorPos(window, &dotX, &dotY);
+				b.controlPoints.erase(b.controlPoints.begin()+idx);//[idx] = glm::vec2(dotX, dotY);
+			}
 		}
 
-		// scaling controls
-		if (key == GLFW_KEY_KP_ADD && (action == GLFW_REPEAT || action == GLFW_PRESS)) scale *= 1.2;
-		if (key == GLFW_KEY_KP_SUBTRACT && (action == GLFW_REPEAT || action == GLFW_PRESS)) scale *= 0.8;
-		// intrinsic rotation controls
-		if (key == GLFW_KEY_KP_7 && (action == GLFW_REPEAT || action == GLFW_PRESS)) rollAngle -= 0.1;
-	    	if (key == GLFW_KEY_KP_9 && (action == GLFW_REPEAT || action == GLFW_PRESS)) rollAngle += 0.1;
-	     if (key == GLFW_KEY_KP_4 && (action == GLFW_REPEAT || action == GLFW_PRESS)) pitchAngle -= 0.1;
-		if (key == GLFW_KEY_KP_6 && (action == GLFW_REPEAT || action == GLFW_PRESS)) pitchAngle += 0.1;
-		if (key == GLFW_KEY_KP_1 && (action == GLFW_REPEAT || action == GLFW_PRESS)) yawAngle -= 0.1;
-		if (key == GLFW_KEY_KP_3 && (action == GLFW_REPEAT || action == GLFW_PRESS)) yawAngle += 0.1;
-		if (key == GLFW_KEY_KP_5 && (action == GLFW_REPEAT || action == GLFW_PRESS)) {
-			rollAngle += 0.1;
-			pitchAngle += 0.1;
-			yawAngle += 0.1;
-		}
-		if (key == GLFW_KEY_KP_2 && (action == GLFW_REPEAT || action == GLFW_PRESS)) {
-			rollAngle -= 0.1;
-			pitchAngle -= 0.1;
-			yawAngle -= 0.1;
-		}
-
-		// if(key == GLFW_KEY_LEFT_SHIFT && action == GLFW_PRESS) {
-		// 	animate = animate ? false: true;
-		// 	curve.clear();
-		// 	t0 = std::chrono::high_resolution_clock::now();
-		// 	t = 0;
-		// }
-		// if(key == GLFW_KEY_ENTER && action == GLFW_PRESS) {
-		// 	animate = false;
-		// 	outerCircle.clear();
-		// 	innerCircle.clear();
-		// 	rollAngle = 0; pitchAngle = 0; yawAngle = 0; scale = 1.0;
-		// 	getParams();
-		// }
 }
 
 void mouse_callback(GLFWwindow* window, int button, int action, int mods) {
 	if (button == GLFW_MOUSE_BUTTON_LEFT && action == GLFW_PRESS) {
- 		// mouseButtonPressed = true;
+		mouseButtonPressed = true;
+
  	} else if (button == GLFW_MOUSE_BUTTON_LEFT && action == GLFW_RELEASE) {
- 		// mouseButtonPressed = false;
+ 		mouseButtonPressed = false;
      } else if (button == GLFW_MOUSE_BUTTON_RIGHT && action == GLFW_RELEASE) {
 		glfwGetCursorPos(window, &dotX, &dotY);
 		//if(dotWithinBounds(dotX, dotY)){
 			dots ++;
 			cout<<"("<<dotX<<" , "<<dotY<<")"<<endl;
-			dotX = (float)dotX/windowWidth - 1;
-			dotY = 1 - (float)dotY/windowHeight;
-			controlPoints.push_back(dotX);
-			controlPoints.push_back(dotY);
+			dotX = (float)(2*dotX)/windowWidth - 1;
+			dotY = 1 - (float)(2*dotY)/windowHeight;
+			b.addControlPoint(dotX, dotY);
 			cout<<"("<<dotX<<" , "<<dotY<<")"<<endl;
 			// controlPoints.push_back((1.0/scroll)*((-1.0+(float)(dotX/400))-(offsetX/400)));
 			// controlPoints.push_back((1.0/scroll)*((1.0 - (float)(dotY/400))-(offsetY/400)));
@@ -407,14 +455,38 @@ void mouse_callback(GLFWwindow* window, int button, int action, int mods) {
 }
 
 void cursor_callback(GLFWwindow* window, double xpos, double ypos) {
-	// if(mouseButtonPressed) {
-     //    	offsetX = offsetX + xpos - prevCursorX;
-     //    	offsetY = offsetY - ypos + prevCursorY;
-	//
+
+	if(mouseButtonPressed) {
+		// glfwGetCursorPos(window, &dotX, &dotY);
+		dotX = (float)(2*xpos)/windowWidth - 1;
+		dotY = 1 - (float)(2*ypos)/windowHeight;
+		int idx = b.selectControlPoint(dotX, dotY);
+		if(idx != -1) {
+			cout<<"select"<<idx<<endl;
+			// glfwGetCursorPos(window, &dotX, &dotY);
+
+			// cout<<"("<<dotX<<" , "<<dotY<<")"<<endl;
+
+			dotX = (float)(2*xpos)/windowWidth - 1;
+			dotY = 1 - (float)(2*ypos)/windowHeight;
+
+			b.controlPoints[idx] = glm::vec2(dotX, dotY);
+		}
+	}
+
  //   	}
  //  	prevCursorX = xpos;
  //  	prevCursorY = ypos;
 	// //cout<<xpos<<"\t"<<ypos<<endl;
+}
+
+// double xoffset, yoffset;
+
+void scroll_callback(GLFWwindow* window, double xoffset, double yoffset) {
+	int increase = (yoffset ==  1) ? 1 : 0;
+	b.incK(increase);
+	cout<<"k = "<<b.k<<endl;
+	// cout<<"("<<xoffset<<","<<yoffset<<")\n";
 }
 
 
@@ -450,13 +522,21 @@ int main(int argc, char *argv[]) {
           glfwSetKeyCallback(window, key_callback);
 		glfwSetMouseButtonCallback(window, mouse_callback);
 		glfwSetCursorPosCallback(window, cursor_callback);
+		glfwSetScrollCallback(window, scroll_callback);
 
 		Program p("data/vertex.glsl", "data/fragment.glsl");
+		Program q("data/vertex2.glsl", "data/fragment2.glsl");
+		cout<<"Program init"<<endl;
+
+		// b = BSpline();
+		cout<<"BSpline init"<<endl;
+
 		glUseProgram(p.id);
+		glUseProgram(q.id);
 		GLint mvpLoc = glGetUniformLocation(p.id, "mvp");
 
-
 		while(!glfwWindowShouldClose(window)) {
+			// cout<<"While loop "<<endl;
 
 			glfwGetWindowSize(window, &windowWidth, &windowHeight);
 			glClearColor(0, 51.f/255.f, 102.f/255.f, 1.0f);
@@ -468,7 +548,7 @@ int main(int argc, char *argv[]) {
 
 			mvp = getMVP();
 			glUniformMatrix4fv(mvpLoc, 1, GL_FALSE, &mvp[0][0]);
-			drawCurve(p.id);
+			render(p.id, q.id);
 
 			if(closeWindow) {break;}
 
