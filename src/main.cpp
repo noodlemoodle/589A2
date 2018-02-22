@@ -37,11 +37,16 @@ double dotX, dotY;
 vector<float> controlPoints;
 float scroll = 1.f;
 double offsetX=0, offsetY = 0;
-// object transformation controls
-float rollAngle = 0, pitchAngle = 0, yawAngle = 0;
-float scale = 1;
+// // object transformation controls
+// float rollAngle = 0, pitchAngle = 0, yawAngle = 0;
+// float scale = 1;
 int dots = 0;
 bool mouseButtonPressed = false;
+
+//for surface
+float roll = 0, pitch = 0, yaw = 0;
+float scale = 0.8;
+float deltaX = 0.0, deltaY = 0.0;
 // curve parameters
 // k = order of B-spline
 // m = number of control points
@@ -50,20 +55,20 @@ bool mouseButtonPressed = false;
 // u = fixed parameter value
 
 // for transformations
-glm::mat4 mvp;
-
+glm::mat4 surfaceMvp;
+bool showSurface = false;
 
 class BSpline {
 public:
 	float k, m, inc;
 	vector<float> knots;
-	vector<glm::vec2> controlPoints;
+	vector<glm::vec3> controlPoints;
 	vector<float> weights;
 
 	BSpline() {
 		k = 2;
 		m = 0; //num control pt
-		inc = 0.001;
+		inc = 0.01;
 		knots = {0, 0.5, 1};
 		weights = {};
 		controlPoints = {};
@@ -100,11 +105,12 @@ public:
 	}
 
 	void updateKnots() {
+		knots.clear();
 		for(int i = 0; i < k; i++) {
 			knots.push_back(0);
 		}
 		float knotInc = 1/(m-k+2);
-		for(int i = 0; i < m - k + 2; i++) { //CHANGE: index used to be k to m inclusive
+		for(int i = 0; i < m - k + 1; i++) { //CHANGE: index used to be k to m inclusive
 			knots.push_back(knotInc*(1+i));
 		}
 		for(int i = m+1; i < m + k + 1; i++) {
@@ -113,12 +119,14 @@ public:
 	}
 
 	// computing E_delta_1 from the set of input Ei
-	glm::vec2 E_delta_1(float u) {
+	glm::vec3 E_delta_1(float u) {
+
+		if(u == 0 || u == 1) return (u == 0) ? controlPoints[0] : controlPoints[controlPoints.size() -1 ];
 		int d = delta(u);
 		// CHANGE: comment out line below
 		// if(d == -1 ) return (u < 1) ? controlPoints[0] : controlPoints[controlPoints.size()-1]; // if its not in any interval then its prob the first point?? (or last)
 		// cout<<"@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@"<<endl;
-		vector<glm::vec2> c;
+		vector<glm::vec3> c;
 		for(int i = 0; i < k; i++) {
 			c.push_back(controlPoints[d-i]);
 		}
@@ -128,6 +136,7 @@ public:
 				float omega = (u - knots[i])/(knots[i+r-1] - knots[i]);
 				c[s].x = omega*c[s].x + (1-omega)*c[s+1].x;
 				c[s].y = omega*c[s].y + (1-omega)*c[s+1].y;
+				c[s].z = 0.0;
 				i--;
 			}
 		}
@@ -135,7 +144,7 @@ public:
 	}
 
 	void addControlPoint(float x, float y) {
-		controlPoints.push_back(glm::vec2(x, y));
+		controlPoints.push_back(glm::vec3(x, y, 0.0f));
 		m = controlPoints.size() == 0 ? 0 : controlPoints.size() - 1;
 	}
 	int selectControlPoint(float x, float y) {
@@ -153,10 +162,14 @@ public:
 	vector<float> getCurve() {
 		updateKnots();
 		vector<float> curve;
+		// cout<<"Printing curve..."<<endl;
+
 		for(float u = 0; u < 1 +inc; u += inc) {
-			glm::vec2 c = E_delta_1(u);
+			glm::vec3 c = E_delta_1(u);
 			curve.push_back(c.x);
 			curve.push_back(c.y);
+			curve.push_back(c.z);
+			// cout<<"u = "<<u <<"\tPoint = ("<<c.x<<" , "<<c.y<<")"<<endl;
 		}
 		return curve;
 	}
@@ -164,13 +177,19 @@ public:
 	vector<float> getSurface() {
 		vector<float> c = getCurve();
 		vector<float> s;
-		for(int i = 0; i < c.size(); i+=2) {
-			for(int j = 0; i < 2*math.PI + inc; i += inc) {
+		for(int i = 0; i < c.size(); i+=3) {
+			for(float j = 0; j < 2*PI + inc; j += 0.01) {
+
 				s.push_back(c[i] * glm::cos(j));
-				s.push_back(c[i] * glm::sin(j));
 				s.push_back(c[i+1]);
+				s.push_back(c[i] * glm::sin(j));
+
+				s.push_back(c[i+3] * glm::cos(j));
+				s.push_back(c[i+4]);
+				s.push_back(c[i+3] * glm::sin(j));
 			}
 		}
+		return s;
 	}
 
 	~BSpline() {}
@@ -333,11 +352,12 @@ public:
 		glBindVertexArray(0);
 	}
 
-	void addBuffer(string name, int index, vector<glm::vec2> temp) {
+	void addBuffer(string name, int index, vector<glm::vec3> temp) {
 		vector<float> buffer;
 		for(int i = 0; i < (int)temp.size(); i++) {
 			buffer.push_back(temp[i].x);
 			buffer.push_back(temp[i].y);
+			buffer.push_back(temp[i].z);
 		}
 		addBuffer(name, index, buffer);
 
@@ -360,13 +380,13 @@ public:
 };
 
 // for transformations on static curve
-glm::mat4 getMVP() {
+glm::mat4 getMVP(float scale, float x, float y, float rollAngle, float pitchAngle, float yawAngle) {
 	glm::mat4 Scale = glm::scale(glm::mat4(1.0f), glm::vec3(scale, scale, scale));
 	glm::mat4 RotateX = glm::rotate(glm::mat4(1.0f), rollAngle, glm::vec3(1, 0, 0));
 	glm::mat4 RotateY = glm::rotate(glm::mat4(1.0f), pitchAngle, glm::vec3(0, 1, 0));
 	glm::mat4 RotateZ = glm::rotate(glm::mat4(1.0f), yawAngle, glm::vec3(0, 0, 1));
-
-	return Scale*RotateZ*RotateY*RotateX;
+	glm::mat4 Translate = glm::translate(glm::mat4(1.0f), glm::vec3(x, y, 0));
+	return Scale*RotateZ*RotateY*RotateX*Translate;
 }
 
 void renderCurve(VertexArray &va, GLuint pid) {
@@ -387,20 +407,43 @@ void renderPoints(VertexArray &va, GLuint pid, int size) {
 void renderSurface(VertexArray &va, GLuint pid) {
 	glUseProgram(pid);
 	glBindVertexArray(va.id);
-	glDrawArrays(GL_TRIANGLES, 0, va.count);
+	glDrawArrays(GL_TRIANGLE_STRIP, 0, va.count);
 	glBindVertexArray(0);
 	glUseProgram(0);
 }
 
+
+
 void render(GLuint pid, GLuint qid) {
 	if(b.controlPoints.size() > 0) {
-		if(b.controlPoints.size() > 0) {
+		if(b.controlPoints.size() > 3) {
 			// render curve
+
 			vector<float> curve = b.getCurve();
-			int curveVertices = curve.size()/2;
-			VertexArray vac(curveVertices);
+			VertexArray vac(curve.size()/3);
 			vac.addBuffer("vac", 0, curve);
 			renderCurve(vac, pid);
+
+			cout<<"Render curve - \tCurve Size = "<<curve.size()/3
+			<<"\nm = "<<b.m<<"\nk = "<<b.k<<"\nNumber of knots = "<<b.knots.size()<<
+			"\nPrinting knot sequence..."<<endl;
+			for(int i = 0; i < b.knots.size(); i++) {
+				cout<<b.knots[i]<<endl;
+			}
+
+			int su = showSurface? 1: 0;
+			cout<< "showSurface = "<<su<<endl;
+
+			if(showSurface) {
+
+				vector<float> surface = b.getSurface();
+				surfaceMvp = getMVP(0.8, -0.3, 0.0, 0.0, 0.0, 0.0);
+				glUniformMatrix4fv(glGetUniformLocation(qid, "mvp"), 1, GL_FALSE, &surfaceMvp[0][0]);
+
+				VertexArray vas(surface.size()/3);
+				vas.addBuffer("vas", 0, surface);
+				renderSurface(vas, qid);
+			}
 		}
 		// render control Points and the lines connecting the points
 		VertexArray vap(b.controlPoints.size());
@@ -425,9 +468,56 @@ void key_callback(GLFWwindow* window, int key, int scancode, int action, int mod
 			if(idx != -1) {
 				cout<<"select"<<idx<<endl;
 				glfwGetCursorPos(window, &dotX, &dotY);
-				b.controlPoints.erase(b.controlPoints.begin()+idx);//[idx] = glm::vec2(dotX, dotY);
+				b.controlPoints.erase(b.controlPoints.begin()+idx);//[idx] = glm::vec3(dotX, dotY);
 			}
 		}
+		if (key == GLFW_KEY_TAB && action == GLFW_PRESS) {
+			showSurface = showSurface ? false : true;
+			if(showSurface == false) {
+				roll = pitch = yaw = deltaY = 0;
+				deltaX = 0.0;
+				scale = 0.8;
+			}
+		}
+
+		// intrinsic rotation controls
+		if (key == GLFW_KEY_KP_7 && (action == GLFW_REPEAT || action == GLFW_PRESS)) roll -= 0.1;
+		if (key == GLFW_KEY_KP_9 && (action == GLFW_REPEAT || action == GLFW_PRESS)) roll += 0.1;
+		if (key == GLFW_KEY_KP_4 && (action == GLFW_REPEAT || action == GLFW_PRESS)) pitch -= 0.1;
+		if (key == GLFW_KEY_KP_6 && (action == GLFW_REPEAT || action == GLFW_PRESS)) pitch += 0.1;
+		if (key == GLFW_KEY_KP_1 && (action == GLFW_REPEAT || action == GLFW_PRESS)) yaw -= 0.1;
+		if (key == GLFW_KEY_KP_3 && (action == GLFW_REPEAT || action == GLFW_PRESS)) yaw += 0.1;
+		if (key == GLFW_KEY_KP_5 && (action == GLFW_REPEAT || action == GLFW_PRESS)) {
+			roll += 0.1;
+			pitch += 0.1;
+			yaw += 0.1;
+		}
+		if (key == GLFW_KEY_KP_2 && (action == GLFW_REPEAT || action == GLFW_PRESS)) {
+			roll -= 0.1;
+			pitch -= 0.1;
+			yaw -= 0.1;
+		}
+		if (key == GLFW_KEY_UP && (action == GLFW_REPEAT || action == GLFW_PRESS)) deltaY += 0.1;
+		if (key == GLFW_KEY_DOWN && (action == GLFW_REPEAT || action == GLFW_PRESS)) deltaY -= 0.1;
+		if (key == GLFW_KEY_LEFT && (action == GLFW_REPEAT || action == GLFW_PRESS)) deltaX -= 0.1;
+		if (key == GLFW_KEY_RIGHT && (action == GLFW_REPEAT || action == GLFW_PRESS)) deltaX += 0.1;
+		// scaling controls
+		if (key == GLFW_KEY_KP_ADD && (action == GLFW_REPEAT || action == GLFW_PRESS)) scale *= 1.2;
+		if (key == GLFW_KEY_KP_SUBTRACT && (action == GLFW_REPEAT || action == GLFW_PRESS)) scale *= 0.8;
+
+		if (key == GLFW_KEY_SPACE && action == GLFW_PRESS) {
+			roll = pitch = yaw = deltaY = 0;
+			deltaX = 0; scale = 0.8;
+			// showSurface = false;
+		}
+		if (key == GLFW_KEY_DELETE && action == GLFW_PRESS) {
+			roll = pitch = yaw = deltaY = 0;
+			deltaX = 0; scale = 0.8;
+			showSurface = false;
+			b.controlPoints.clear();
+
+		}
+
 
 }
 
@@ -439,19 +529,12 @@ void mouse_callback(GLFWwindow* window, int button, int action, int mods) {
  		mouseButtonPressed = false;
      } else if (button == GLFW_MOUSE_BUTTON_RIGHT && action == GLFW_RELEASE) {
 		glfwGetCursorPos(window, &dotX, &dotY);
-		//if(dotWithinBounds(dotX, dotY)){
-			dots ++;
-			cout<<"("<<dotX<<" , "<<dotY<<")"<<endl;
-			dotX = (float)(2*dotX)/windowWidth - 1;
-			dotY = 1 - (float)(2*dotY)/windowHeight;
-			b.addControlPoint(dotX, dotY);
-			cout<<"("<<dotX<<" , "<<dotY<<")"<<endl;
-			// controlPoints.push_back((1.0/scroll)*((-1.0+(float)(dotX/400))-(offsetX/400)));
-			// controlPoints.push_back((1.0/scroll)*((1.0 - (float)(dotY/400))-(offsetY/400)));
-			// cout<<"placing dot =  dotNum: "<<dots<<" at window coordinates: (" <<
-			// (1.0/scroll)*((-1.0+(float)(dotX/400))-(offsetX/400))<<", "<<
-			// (1.0/scroll)*((1.0 - (float)(dotY/400))-(offsetY/400))<<" )"<<endl;
-		//}
+		dots ++;
+		cout<<"("<<dotX<<" , "<<dotY<<")"<<endl;
+		dotX = (float)(2*dotX)/windowWidth - 1;
+		dotY = 1 - (float)(2*dotY)/windowHeight;
+		b.addControlPoint(dotX, dotY);
+		cout<<"("<<dotX<<" , "<<dotY<<")"<<endl;
 	}
 
 }
@@ -465,21 +548,12 @@ void cursor_callback(GLFWwindow* window, double xpos, double ypos) {
 		int idx = b.selectControlPoint(dotX, dotY);
 		if(idx != -1) {
 			cout<<"select"<<idx<<endl;
-			// glfwGetCursorPos(window, &dotX, &dotY);
-
-			// cout<<"("<<dotX<<" , "<<dotY<<")"<<endl;
-
 			dotX = (float)(2*xpos)/windowWidth - 1;
 			dotY = 1 - (float)(2*ypos)/windowHeight;
 
-			b.controlPoints[idx] = glm::vec2(dotX, dotY);
+			b.controlPoints[idx] = glm::vec3(dotX, dotY, 0.0);
 		}
 	}
-
- //   	}
- //  	prevCursorX = xpos;
- //  	prevCursorY = ypos;
-	// //cout<<xpos<<"\t"<<ypos<<endl;
 }
 
 // double xoffset, yoffset;
@@ -493,9 +567,6 @@ void scroll_callback(GLFWwindow* window, double xoffset, double yoffset) {
 
 
 int main(int argc, char *argv[]) {
-
-		// getParams();
-
           if (!glfwInit()) {
 
                     cout << "ERROR: GLFW failed to initialize, TERMINATING" << endl;
@@ -528,15 +599,15 @@ int main(int argc, char *argv[]) {
 
 		Program p("data/vertex.glsl", "data/fragment.glsl");
 		Program q("data/vertex2.glsl", "data/fragment2.glsl");
-		cout<<"Program init"<<endl;
 
-		// b = BSpline();
-		cout<<"BSpline init"<<endl;
+		// glUseProgram(p.id);
+		// glUseProgram(q.id);
+		// GLint pMvpLoc = glGetUniformLocation(p.id, "mvp");
+		// GLint qMvpLoc = glGetUniformLocation(q.id, "mvp");
 
-		glUseProgram(p.id);
 		glUseProgram(q.id);
-		GLint mvpLoc = glGetUniformLocation(p.id, "mvp");
-
+		GLint qMvpLoc = glGetUniformLocation(q.id, "mvp");
+		// surfaceMvp = getMVP(scale, deltaX, deltaY, roll, pitch, yaw);
 		while(!glfwWindowShouldClose(window)) {
 			// cout<<"While loop "<<endl;
 
@@ -547,9 +618,10 @@ int main(int argc, char *argv[]) {
                glViewport((windowWidth - std::min(windowWidth, windowHeight))/2, (windowHeight - std::min(windowWidth, windowHeight))/2, std::min(windowWidth, windowHeight), std::min(windowWidth, windowHeight));
 
 			glUseProgram(p.id);
+			glUseProgram(q.id);
 
-			mvp = getMVP();
-			glUniformMatrix4fv(mvpLoc, 1, GL_FALSE, &mvp[0][0]);
+			surfaceMvp = getMVP(scale, deltaX, deltaY, roll, pitch, yaw);
+			glUniformMatrix4fv(qMvpLoc, 1, GL_FALSE, &surfaceMvp[0][0]);
 			render(p.id, q.id);
 
 			if(closeWindow) {break;}
